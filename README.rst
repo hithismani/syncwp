@@ -6,18 +6,19 @@ SyncWP
 .. image:: https://img.shields.io/pypi/v/syncwp.svg
         :target: https://pypi.python.org/pypi/syncwp
 
-A quick script that helps migrate sites hosted with the help of EasyEngine, into your local Lando work environment.
+A quick script that helps migrate sites hosted with the help of EasyEngine, into your local Lando work environment. This work in progress script has already gotten the time I need to migrate a few sites from 20-60 minutes down to about 3-5 minutes. Goodbye you pesky backup plugins!
 
 THIS SCRIPT IS STILL IN DEVELOPMENT.
 
-* Free software: MIT license
-* Documentation: https://syncwp.readthedocs.io.
+Installation Steps:
+-------------------
+
+- run `pip install git+https://github.com/hithismani/syncwp`
 
 Requirements & Use Case
 -----------------------
 - http://EasyEngine.io on your wordpress server.
 - https://lando.dev/ (and Docker) on your local wordpress machine.
-
 
 Usage:
 ------
