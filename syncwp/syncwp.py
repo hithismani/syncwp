@@ -59,6 +59,9 @@ class ssh:
                 last_line = ''
         return last_line
 
+def printTotals(transferred, toBeTransferred):
+        print("Transferred: {0}\tOut of: {1}".format(transferred, toBeTransferred))
+
 def login_connect(username, password, ipaddress):
     return ssh(ipaddress, username, password)
 
@@ -135,18 +138,17 @@ def run(args):
             wp_content_file_name = "wordpress-backup.tar.gz"                
             if os.path.exists(current_path+'/local-backups/'+ wp_content_file_name):               
                 #unpack sql gzip in local machine, and prepare for upload
-                ftp_client.put("%s/local-backups/wordpress-backup.tar.gz" % current_path,"/opt/easyengine/sites/%s/app/htdocs/wp-content/wordpress-backup.tar.gz" % domain)
+                ftp_client.put("%s/local-backups/wordpress-backup.tar.gz" % current_path,"/opt/easyengine/sites/%s/app/htdocs/wp-content/wordpress-backup.tar.gz" % domain, callback=printTotals)
                 commands = []
                 if "R" in args.localtasks:
                     commands = [
                         'cd '+ ('/opt/easyengine/sites/%s/app/htdocs/wp-content/' %domain ),
-                        'tar -xvzf wordpress-backup.tar.gz','rm wordpress-backup.tar.gz',
-                         'cd /'
+                        'tar -xvzf wordpress-backup.tar.gz','rm wordpress-backup.tar.gz'
                         ]
                 else:
                     commands = [
                         'cd '+ ('/opt/easyengine/sites/%s/app/htdocs/wp-content/' %domain ),
-                        'tar -xvzf wordpress-backup.tar.gz', 'cd /'
+                        'tar -xvzf wordpress-backup.tar.gz'
                         ]
                 run_server_command(connection, commands)              
             else:
@@ -157,7 +159,7 @@ def run(args):
                 os.chdir('%s/local-backups/' % current_path)
                 gunzip_shutil((current_path+'/local-backups/'+ sql_file_name),(current_path+'/local-backups/database.sql'))
                 print_message(Fore.BLUE, "Notes: Unpacked!Now Uploading")
-                ftp_client.put("%s/local-backups/database.sql" % current_path,"/opt/easyengine/sites/%s/app/htdocs/database.sql" % domain)
+                ftp_client.put("%s/local-backups/database.sql" % current_path,"/opt/easyengine/sites/%s/app/htdocs/database.sql" % domain, callback=printTotals)
                 if "R" in args.localtasks:
                     commands = [
                         'ee shell %s' % domain,
@@ -213,9 +215,9 @@ def run(args):
                 #download database / wp-content
                     ftp_client= connection.sftp()
                     if "d" in args.servertasks:
-                        ftp_client.get("/opt/easyengine/sites/%s/app/htdocs/database.sql" % domain,"%s/server-backups/database.sql" % current_path)
+                        ftp_client.get("/opt/easyengine/sites/%s/app/htdocs/database.sql" % domain,"%s/server-backups/database.sql" % current_path, callback=printTotals)
                     if "w" in args.servertasks:
-                        ftp_client.get("/opt/easyengine/sites/%s/app/htdocs/wp-content/wordpress-backup.tar.gz" % domain,"%s/server-backups/wordpress-backup.tar.gz" % current_path)
+                        ftp_client.get("/opt/easyengine/sites/%s/app/htdocs/wp-content/wordpress-backup.tar.gz" % domain,"%s/server-backups/wordpress-backup.tar.gz" % current_path, callback=printTotals)
                 if "R" in args.servertasks:     
                     delete_commands = []
                     if "w" in args.servertasks:
@@ -225,7 +227,7 @@ def run(args):
                         delete_commands.append('rm /opt/easyengine/sites/%s/app/htdocs/database.sql' % domain)
                     run_server_command(connection, delete_commands)
                 else:
-                    print("Notes: Removal of Backup Files From Server Skipped")
+                    print_message(Fore.RED, "Notes: Removal of Backup Files From Server Skipped")
                 print(bytearray(strdata, 'utf-8').decode())   # print the last line of received data
                 print('|== \t Server Logs \t ==|')
                 print(bytearray(fulldata, 'utf-8').decode())  # This contains the complete data received.
