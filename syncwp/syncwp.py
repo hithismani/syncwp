@@ -1,12 +1,13 @@
-import threading, time, os, shutil, argparse, tarfile, gzip, subprocess, paramiko, getpass
-from colorama import Fore, Style
+import threading, time, os, shutil, argparse, tarfile, gzip, subprocess, paramiko, getpass, yaml, re
+from colorama import init, Fore, Style
+init(convert=True)
 
 strdata=''
 fulldata=''
 sftp = ''
 
 def print_message(colour, message):
-    print (colour + message)
+    print (colour + str(message))
     print(Style.RESET_ALL)
 
 class ssh:
@@ -70,9 +71,14 @@ def gunzip_shutil(source_filepath, dest_filepath, block_size=65536):
             open(dest_filepath, 'wb') as d_file:
         shutil.copyfileobj(s_file, d_file, block_size)
 
-def run_server_command(connection, commands):
+def run_server_command(connection, commands, custom_variables):
     connection.send_shell("cd /")
     for command in commands:
+        command = command
+        to_replace =  re.findall(r"\$\w*",command)
+        for item in to_replace:
+            print(item)
+            command = (command.replace(item, get_from_dict('Key',item,custom_variables)))
         print_message(Fore.BLUE, ("Runnning Command: " + command))
         connection.send_shell(command)
         time.sleep(2)
@@ -80,8 +86,12 @@ def run_server_command(connection, commands):
     print_message(Fore.BLUE, "Notes: Waiting for 10 Seconds Before Next Set Of Commands")
     connection.send_shell("cd /")
 
-def run_local_command(commands):
+def run_local_command(commands, custom_variables):
     for command in commands:
+        command = command
+        to_replace =  re.findall(r"\$\w*",command)
+        for item in to_replace:
+            command = (command.replace(item, get_from_dict('Key',item,custom_variables)))
         print_message(Fore.BLUE, ("Runnning Command: " + command))
         os.system(command+' &')
     time.sleep(10)
@@ -100,9 +110,71 @@ def folder_create(path):
     else:
         print_message(Fore.BLUE,("Notes: Required Folder exists. Yay!"))
 
+# function to return key for any value 
+def get_from_dict(val_type, val, array):
+    if val.startswith("$"):
+        val=val[1:] #To help match true value
+    if val_type.lower() == "key":
+        for key, value in array: 
+            if key == val: 
+                return value 
+        return val
+    elif val_type.lower() == "value":
+        for key, value in array: 
+            if value == val: 
+                return key 
+        return val  
+
+def find_index(array, findvar):
+    found = False
+    i = 0
+    while i < len(array):
+        if findvar in array[i]:
+            found = True
+            break
+        else:
+            i = i +1 
+    if found == False:
+        return("Not Found")
+    else:
+        return(i)
+
+def find_replace(source_array, replacement_array): #To replace single element array, with values from a custom array
+    source_array = source_array
+    to_replace =  re.findall(r"\$\w*",source_array)
+    for element in to_replace:
+        print_message(Fore.YELLOW, ("Item To Replace: " + element))
+        source_array = source_array.replace(element, get_from_dict("Key",element,replacement_array))
+    return(source_array)
+
 def run(args):
+    with open('syncwp.yaml', 'r') as f:
+        yml = yaml.load(f)
+        f.close()
     current_path = os.getcwd()
-    domain = args.domain
+
+    #Assign Temporary Variables
+    temp_variables=[['current_path',current_path]]
+    for item, value in yml['customVars'].items():
+        temp = [item,value]
+        temp_variables.append(temp)
+    #Assign Custom Variables (Temporary Variables With All Input Values Set)
+    custom_variables = []
+    
+    for item, value in temp_variables:
+        temp = [item,value]
+        to_replace =  re.findall(r"\$\w*",value)
+        if len(to_replace) > 0:
+            for element in to_replace:
+                print(element)
+                custom_variables.append([item, value.replace(element, get_from_dict('Key',element,custom_variables))])
+        else:
+            custom_variables.append(temp)
+    domain = str(custom_variables[find_index(custom_variables,"deploy_domain")][1])
+    local_domain = str(custom_variables[find_index(custom_variables,"local_domain")][1])
+    local_backup_dir = custom_variables[find_index(custom_variables,"localServerBackupDirectory")][1]
+    server_local_dir = custom_variables[find_index(custom_variables,"serverLocalBackupDirectory")][1]
+
     password = ""
     if not args.password:
         password = getpass.getpass("Enter Server Password: ")
@@ -113,68 +185,46 @@ def run(args):
     else:
         if "B" in args.localtasks: 
             if "d" in args.localtasks or "w" in args.localtasks:
-                folder_create(current_path + "/local-backups")
-                os.chdir('%s/local-backups/' % current_path)   
+                folder_create(os.path.join(current_path,local_backup_dir))
+                os.chdir(current_path)   
                 if "d" in args.localtasks:
                     #Export Database
-                    export_commands = [
-                        ('lando wp search-replace ' +args.localdomain + ' ' + domain),
-                        'lando db-export database.sql',
-                        ('lando wp search-replace ' +domain + ' ' + args.localdomain)
-                        ]
-                    run_local_command(export_commands)
+                    export_commands = yml["local"]["database"]["export"]
+                    run_local_command(export_commands, custom_variables)
                 if "w" in args.localtasks:
-                    os.chdir('%s/wp-content/' % current_path)  
-                    #Export Database
-                    export_commands = [('tar -vczf wordpress-backup.tar.gz *')]                  
-                    run_local_command(export_commands)
-                    shutil.move('%s/wp-content/wordpress-backup.tar.gz' % current_path, '%s/local-backups/wordpress-backup.tar.gz' % current_path)
+                    os.chdir(os.path.join(current_path,custom_variables[find_index(custom_variables,"localWPContentPath")][1]))  
+                    
+                    #Export WpContent
+                    export_commands = yml["local"]["wp_content"]["export"]                  
+                    run_local_command(export_commands, custom_variables)
                     os.chdir('%s' % current_path)                
         if "U" in args.localtasks:
             connection = login_connect(args.user,password,args.host)
             connection.open_shell()
-            ftp_client= connection.sftp()         
-            sql_file_name = "database.sql.gz"
-            wp_content_file_name = "wordpress-backup.tar.gz"                
-            if os.path.exists(current_path+'/local-backups/'+ wp_content_file_name):               
+            ftp_client= connection.sftp()
+            sql_file_name = str(custom_variables[find_index(custom_variables,"sql_file_name")][1])
+            wp_content_file_name = str(custom_variables[find_index(custom_variables,"wp_content_file_name")][1])
+            file_path_local = os.path.join(current_path,local_backup_dir,wp_content_file_name)
+            print_message(Fore.RED, file_path_local)  
+            file_path_deploy = find_replace(yml["local"]["wp_content"]["upload"]["directory"],custom_variables)
+            print_message(Fore.RED, file_path_deploy)  
+            if os.path.exists(file_path_local):            
                 #unpack sql gzip in local machine, and prepare for upload
-                ftp_client.put("%s/local-backups/wordpress-backup.tar.gz" % current_path,"/opt/easyengine/sites/%s/app/htdocs/wp-content/wordpress-backup.tar.gz" % domain, callback=printTotals)
-                commands = []
-                if "R" in args.localtasks:
-                    commands = [
-                        'cd '+ ('/opt/easyengine/sites/%s/app/htdocs/wp-content/' %domain ),
-                        'tar -xvzf wordpress-backup.tar.gz','rm wordpress-backup.tar.gz'
-                        ]
-                else:
-                    commands = [
-                        'cd '+ ('/opt/easyengine/sites/%s/app/htdocs/wp-content/' %domain ),
-                        'tar -xvzf wordpress-backup.tar.gz'
-                        ]
-                run_server_command(connection, commands)              
+                ftp_client.put(file_path_local,file_path_deploy, callback=printTotals)
+                commands = yml["local"]["wp_content"]["extract"]
+                run_server_command(connection, commands,custom_variables)              
             else:
                 print_message(Fore.RED, "Notes: WP-Content Not In Directory")
-            if os.path.exists(current_path+'/local-backups/'+ sql_file_name):               
+            local_sql_file_path = os.path.join(current_path,local_backup_dir,sql_file_name) 
+            if os.path.exists(local_sql_file_path):               
                 #unpack sql gzip in local machine, and prepare for upload
                 print_message(Fore.BLUE, "Notes: Unpacking .tar.gz Files into Wp-Content")
-                os.chdir('%s/local-backups/' % current_path)
-                gunzip_shutil((current_path+'/local-backups/'+ sql_file_name),(current_path+'/local-backups/database.sql'))
+                os.chdir(os.path.join(current_path,local_backup_dir))
+                gunzip_shutil(local_sql_file_path,local_sql_file_path)
                 print_message(Fore.BLUE, "Notes: Unpacked!Now Uploading")
-                ftp_client.put("%s/local-backups/database.sql" % current_path,"/opt/easyengine/sites/%s/app/htdocs/database.sql" % domain, callback=printTotals)
-                if "R" in args.localtasks:
-                    commands = [
-                        'ee shell %s' % domain,
-                        'wp db import ./database.sql',
-                        'exit',
-                        'cd /',
-                        ('rm /opt/easyengine/sites/%s/app/htdocs/database.sql' % domain)
-                        ]
-                else:
-                    commands = [
-                        'ee shell %s' % domain,
-                        'wp db import ./database.sql',
-                        'exit'
-                        ]
-                run_server_command(connection, commands)
+                ftp_client.put(local_sql_file_path,file_path_deploy, callback=printTotals)
+                commands=yml["local"]["database"]["import"]
+                run_server_command(connection, commands,custom_variables)
                 os.chdir('%s' % current_path)                
             else:
                 print_message(Fore.RED,"Notes: MySQL Database Not Found On Local Machine")
@@ -192,40 +242,37 @@ def run(args):
     else:
         if "B" in args.servertasks:
             if "d" in args.servertasks or "w" in args.servertasks:
-                folder_create(current_path + "/server-backups")
+                folder_create(os.path.join(current_path,server_local_dir))
                 connection = login_connect(args.user,password,args.host)
                 connection.open_shell()
                 if "d" in args.servertasks:
                 #Export Database
-                    export_commands = [
-                        'ee shell %s' % domain,
-                        'wp db export ./database.sql',
-                        'exit'
-                        ]
-                    run_server_command(connection,export_commands)
+                    export_commands = yml["server"]["database"]["export"]
+                    run_server_command(connection,export_commands,custom_variables)
                 #Export wp-content
                 if "w" in args.servertasks:
-                    wp_commands = [
-                        'cd /opt/easyengine/sites/%s/app/htdocs/wp-content' % domain,
-                        'tar -vczf wordpress-backup.tar.gz *'
-                        ]
-                    run_server_command(connection,wp_commands)
+                    wp_commands = yml["server"]["wp_content"]["export"]
+                    run_server_command(connection,wp_commands,custom_variables)
                     time.sleep(10)
                 if "D" in args.servertasks:   
                 #download database / wp-content
                     ftp_client= connection.sftp()
                     if "d" in args.servertasks:
-                        ftp_client.get("/opt/easyengine/sites/%s/app/htdocs/database.sql" % domain,"%s/server-backups/database.sql" % current_path, callback=printTotals)
+                        server_path = find_replace(yml["server"]["database"]["download"]["serverPath"],custom_variables)
+                        local_path = find_replace(yml["server"]["database"]["download"]["localPath"],custom_variables)  
+                        ftp_client.get(server_path,local_path, callback=printTotals)
                     if "w" in args.servertasks:
-                        ftp_client.get("/opt/easyengine/sites/%s/app/htdocs/wp-content/wordpress-backup.tar.gz" % domain,"%s/server-backups/wordpress-backup.tar.gz" % current_path, callback=printTotals)
+                        server_path = find_replace(yml["server"]["wp_content"]["download"]["serverPath"],custom_variables)
+                        local_path = find_replace(yml["server"]["wp_content"]["download"]["localPath"],custom_variables)  
+                        ftp_client.get(server_path,local_path, callback=printTotals)
                 if "R" in args.servertasks:     
-                    delete_commands = []
                     if "w" in args.servertasks:
                     #delete server files
-                        delete_commands.append('rm /opt/easyengine/sites/%s/app/htdocs/wp-content/wordpress-backup.tar.gz' % domain)
-                    if "d" in args.servertasks:    
-                        delete_commands.append('rm /opt/easyengine/sites/%s/app/htdocs/database.sql' % domain)
-                    run_server_command(connection, delete_commands)
+                        delete_commands = yml["server"]["wp_content"]["remove"]
+                        run_server_command(connection, delete_commands,custom_variables)
+                    if "d" in args.servertasks:
+                        delete_commands = yml["server"]["database"]["remove"]
+                        run_server_command(connection, delete_commands,custom_variables)
                 else:
                     print_message(Fore.RED, "Notes: Removal of Backup Files From Server Skipped")
                 print(bytearray(strdata, 'utf-8').decode())   # print the last line of received data
@@ -238,32 +285,33 @@ def run(args):
                 print_message(Fore.BLUE,'Notes: Neither (d)atabase nor (w)ordpress folders requested for backup. Stopping.')
                 raise SystemExit
         if "E" in args.servertasks:
-            file_name = "wordpress-backup.tar.gz"
-            if os.path.exists(current_path+'/server-backups/'+ file_name):
-                if os.path.exists(current_path+'/wp-content/'):
+            wp_content_file_name = str(custom_variables[find_index(custom_variables,"wp_content_file_name")][1])
+            print_message(Fore.RED, str(os.path.join(current_path,server_local_dir,wp_content_file_name)))
+            if os.path.exists(os.path.join(current_path,server_local_dir,wp_content_file_name)):
+                if os.path.exists(os.path.join(current_path,custom_variables[find_index(custom_variables,"localWPContentPath")][1])):
                         #unpack zip files
                         print_message(Fore.BLUE, "Notes: Unpacking .tar.gz Files into Wp-Content")
-                        os.chdir('%s/wp-content/' % current_path)
-                        tar = tarfile.open(current_path+'/server-backups/'+ file_name)
+                        os.chdir(os.path.join(custom_variables[find_index(custom_variables,"localWPContentPath")][1]))
+                        tar = tarfile.open(os.path.join(current_path,server_local_dir,wp_content_file_name))
                         tar.extractall()
                         tar.close()
                         print_message(Fore.BLUE, "Notes: .tar.gz Is Now Unpacked!")
                         os.chdir('%s' % current_path)
+                else:
+                    print_message(Fore.RED,"Notes: Local WP-CONTENT Folder Not Found")
             else:
-                print_message(Fore.RED,"Notes: WP-CONTENT Folder Not Found")
+                print_message(Fore.RED,"Notes: WP-CONTENT Backup File Not Found")
         else:
             print_message(Fore.BLUE,"Notes: You've skipped Export Function")
         if "M" in args.servertasks:
-            if args.localdomain:
-                run_local_command(['lando db-import /server-backups/database.sql','lando wp search-replace ' +domain + ' ' + args.localdomain])
+            if local_domain:
+                run_local_command(yml["local"]["database"]["migrate"], custom_variables)
             else:
                 print_message(Fore.BLUE,"Notes: No local domain set")
 
 def main():
     parser=argparse.ArgumentParser(description="SyncWP")
-    parser.add_argument("-domain",help="Enter Domain Name" ,dest="domain", type=str, required=True)
-    parser.add_argument("-local",help="Local Domain Name / Host URL" ,dest="localdomain", type=str, required=False)
-    parser.add_argument("-host",help="Enter Domain Dhost" ,dest="host", type=str, required=True)
+    parser.add_argument("-host",help="Enter Domain Host" ,dest="host", type=str, required=True)
     parser.add_argument("-user",help="Enter Domain Username" ,dest="user", type=str, required=True)
     parser.add_argument("-password",help="Enter Domain Password" ,dest="password", type=str, required=False)
     parser.add_argument("-server",help="(B)ackup (d)atabase, (w)p_content | (D)ownload | (R)emove | (E)xtract Files | (M)igrate Into Local | (S)kip All" ,dest="servertasks", type=str, default="BdwDREM" ,required=True)

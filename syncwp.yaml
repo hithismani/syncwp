@@ -1,0 +1,64 @@
+#Assign Custom Variables Within Your YAML File by stating them the "customVars" list, and calling them with a $ sign.
+customVars:
+  sql_file_name: database.sql #Required. Preferred Name Of SQL Backup File. Used To Backup & Restore.
+  wp_content_file_name: wordpress-backup.tar.gz #Required. Preferred Name Of WP-Content Backup File. Used To Backup & Restore. GZ Compression is usually added by default the file.
+  localServerBackupDirectory: local-backups #Required. Rel path (From project root) to the local server backup folder.
+  localWPContentPath: wp-content
+  serverLocalBackupDirectory: server-backups #Required. Rel path (From project root) to the server backup folder when downloaded locally.
+  deploy_domain: example.com #Required. Deployment Domain. Used to SSH into, and to make search-replace fixes.
+  local_domain: example.lndo.site #Required. Develpoment Domain. Used to SSH into, and to make search-replace fixes.
+  #current_path: A SyncWP Variable, for current working directory path.
+
+server:
+  database:
+    export:
+    - ee shell $deploy_domain,
+    - wp db export ./$sql_file_name
+    - exit
+    download:
+      serverPath: /opt/easyengine/sites/$deploy_domain/app/htdocs/$sql_file_name
+      localPath: $current_local_path/$serverLocalBackupDirectory/$sql_file_name
+    remove:
+     - rm /opt/easyengine/sites/$deploy_domain/app/htdocs/wp-content/$wp_content_file_name
+  wp_content:
+    export:
+    - cd /opt/easyengine/sites/$deploy_domain/app/htdocs/wp-content
+    - tar -vczf $wp_content_file_name *
+    download:
+      serverPath: /opt/easyengine/sites/$deploy_domain/app/htdocs/wp-content/$wp_content_file_name
+      localPath: $current_path/$serverLocalBackupDirectory/$wp_content_file_name
+    remove:
+    - rm /opt/easyengine/sites/$deploy_domain/app/htdocs/wp-content/$wp_content_file_name
+
+local:
+  database:
+    export:
+    - lando wp search-replace $local_domain $deploy_domain
+    - lando db-export $sql_file_name
+    - lando wp search-replace $deploy_domain $local_domain
+    upload:
+      directory: /opt/easyengine/sites/$deploy_domain/app/htdocs/database.sql
+    import: #into server
+    - ee shell $deploy_domain
+    - wp db import $sql_file_name
+    - exit
+    - cd /
+    - rm /opt/easyengine/sites/$deploy_domain/app/htdocs/database.sql
+    migrate:
+    - lando db-import /$serverLocalBackupDirectory/$sql_file_name
+    - lando wp search-replace $deploy_domain $local_domain                      
+  wp_content:
+    export:
+    - cd $current_path/wp-content/
+    - tar -vczf $wp_content_file_name *
+    #You need to push the backup file into the $localServerBackupDirectory directory!
+    - Move-item –path $current_path/wp-content/$wp_content_file_name –destination $current_path/$localServerBackupDirectory/$wp_content_file_name
+    #Upload will be handled by the script automatically.
+    upload:
+      directory: /opt/easyengine/sites/$deploy_domain/app/htdocs/wp-content/
+    extract:
+    - cd /opt/easyengine/sites/$deploy_domain/app/htdocs/wp-content/
+    - tar -xvzf $wp_content_file_name
+    - rm $wp_content_file_name
+    remove:
+    - rm /opt/easyengine/sites/$deploy_domain/app/htdocs/wp-content/$wp_content_file_name
