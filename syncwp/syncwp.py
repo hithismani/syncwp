@@ -155,6 +155,7 @@ def run(args):
 
     #Assign Temporary Variables
     temp_variables=[['current_path',current_path]]
+
     for item, value in yml['customVars'].items():
         temp = [item,value]
         temp_variables.append(temp)
